@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta
+      name="viewport"
+      content="initial-scale=1.0, user-scalable=no, width=device-width"
+    />
+    <title>基础 Line</title>
+    <style>
+      html,
+      body,
+      #container {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container"></div>
+    <script src="https://a.amap.com/Loca/static/mock/city_line.js"></script>
+    <script src="https://webapi.amap.com/maps?v=1.4.15&key=e1b511d57a8a01e26d8d7695696bbdd7&plugin=Map3D"></script>
+    <script src="./test_data.js"></script>
+    <script>
+      var getRgba = function (str) {
+        var red = parseFloat(str.substr(0, 2), 16) / 255.0;
+        var green = parseFloat(str.substr(2, 2), 16) / 255.0;
+        var blue = parseFloat(str.substr(4, 2), 16) / 255.0;
+        var alpha = 1;
+        if (str.length >= 8) {
+          alpha = parseFloat(str.substr(6, 2), 16) / 255.0;
+        }
+        return [red, green, blue, alpha];
+      };
+
+      var map = new AMap.Map("container", {
+        viewMode: "3D",
+        defaultCursor: "pointer",
+        mapStyle: "amap://styles/whitesmoke",
+        showBuildingBlock: true,
+        expandZoomRange: true,
+        zooms: [3, 20],
+        pitch: 50,
+        zoom: 17,
+        center: [116.84655458822007, 38.3],
+      });
+
+      var object3Dlayer = new AMap.Object3DLayer({ zIndex: 10 });
+
+      map.add(object3Dlayer);
+
+      map.setFeatures(["road"]);
+
+      var Line3D = new AMap.Object3D.Line();
+      Line3D.transparent = true;
+
+      var geometry = Line3D.geometry;
+
+      var addPipe = function (org, des, org_color, des_color, segment, radius) {
+        var pipe = new AMap.Object3D.Mesh();
+        var geometry = pipe.geometry;
+        var verticesLength = segment * 2;
+        var path = [];
+        for (var i = 0; i < segment; i++) {
+          var getGeodeticCoord = function (x, y) {
+            geo = map.lngLatToGeodeticCoord([x, y]);
+            var angle = (2 * Math.PI * i) / segment;
+            var new_x = geo.x + Math.cos(angle) * radius;
+            var new_y = geo.y + Math.sin(angle) * radius;
+            return [new_x, new_y];
+          };
+          var org_point = getGeodeticCoord(org[0], org[1]);
+          var des_point = getGeodeticCoord(des[0], des[1]);
+          path.push(org_point);
+          path.push(des_point);
+          geometry.vertices.push(org_point[0], org_point[1], -org[2]);
+          geometry.vertices.push(des_point[0], des_point[1], -des[2]);
+
+          // orgin and desination color
+          geometry.vertexColors.push.apply(geometry.vertexColors, org_color);
+          geometry.vertexColors.push.apply(geometry.vertexColors, des_color);
+
+          var orgIndex = i * 2;
+          var desIndex = orgIndex + 1;
+          var nextOrgIndex = (orgIndex + 2) % verticesLength;
+          var nextDesIndex = (orgIndex + 3) % verticesLength;
+
+          geometry.faces.push(orgIndex, desIndex, nextDesIndex);
+          geometry.faces.push(orgIndex, nextDesIndex, nextOrgIndex);
+        }
+
+        for (var i = 0; i < segment; i++) {
+          // origin's point
+          geometry.vertices.push.apply(
+            geometry.vertices,
+            geometry.vertices.slice(i * 6 + 3, i * 6 + 6)
+          );
+          geometry.vertexColors.push.apply(geometry.vertexColors, org_color);
+        }
+
+        var triangles = AMap.GeometryUtil.triangulateShape(path);
+        var offset = segment * 2;
+
+        /*
+        for (var v = 0; v < triangles.length; v += 3) {
+          geometry.faces.push(
+            triangles[v] + offset,
+            triangles[v + 2] + offset,
+            triangles[v + 1] + offset
+          );
+        }
+        */
+
+        pipe.transparent = true;
+        object3Dlayer.add(pipe);
+      };
+
+      var addPoint = function (address, color) {
+        geodetic = map.lngLatToGeodeticCoord([address[0], address[1]]);
+        geometry.vertices.push(geodetic.x, geodetic.y, 0 * height_zoom);
+        geometry.vertexColors.push(color[0], color[1], color[2], color[3]);
+      };
+
+      test_data.content.forEach(function (item, index) {
+        var setNode = JSON.parse(item.setNode);
+        var pipe_color = getRgba(item.legendColor.substr(1));
+
+        for (var i = 1; i < setNode.length; i++) {
+          // addPoint(setNode[i - 1], pipe_color);
+          // addPoint(setNode[i], pipe_color);
+          addPipe(
+            setNode[i - 1].concat([0]),
+            setNode[i].concat([0]),
+            pipe_color,
+            pipe_color,
+            32,
+            50
+          );
+        }
+      });
+
+      object3Dlayer.add(Line3D);
+    </script>
+  </body>
+</html>
