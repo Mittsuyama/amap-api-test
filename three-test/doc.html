@@ -124,17 +124,8 @@
         render: () => {
           // 这里必须执行！！重新设置 three 的 gl 上下文状态。
           renderer.state.reset();
-          var {
-            near,
-            far,
-            fov,
-            up,
-            lookAt,
-            position,
-          } = customCoords.getCameraParams();
-
-          // 2D 地图下使用的正交相机
-          // var { near, far, top, bottom, left, right, position, rotation } = customCoords.getCameraParams();
+          var { near, far, fov, up, lookAt, position } =
+            customCoords.getCameraParams();
 
           // 这里的顺序不能颠倒，否则可能会出现绘制卡顿的效果。
           camera.near = near;
@@ -144,14 +135,6 @@
           camera.up.set(...up);
           camera.lookAt(...lookAt);
           camera.updateProjectionMatrix();
-
-          // 2D 地图使用的正交相机参数赋值
-          // camera.top = top;
-          // camera.bottom = bottom;
-          // camera.left = left;
-          // camera.right = right;
-          // camera.position.set(...position);
-          // camera.updateProjectionMatrix();
 
           renderer.render(scene, camera);
         },

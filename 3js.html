@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta
+      name="viewport"
+      content="initial-scale=1.0, user-scalable=no, width=device-width"
+    />
+    <title>自定义三维图层</title>
+    <link
+      rel="stylesheet"
+      href="https://a.amap.com/jsapi_demos/static/demo-center/css/demo-center.css"
+    />
+    <style>
+      html,
+      body,
+      #container {
+        width: 100%;
+        height: 100%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="container"></div>
+    <script src="https://webapi.amap.com/maps?v=2.0&key=6ed38a1265faa551bd65434e43372c09"></script>
+    <!-- 目前由于three 118 以上的版本对 GL 做了较大的改动，因此目前我们只支持到 117 版本 -->
+    <script src="https://a.amap.com/jsapi_demos/static/demo-center-v2/three.js"></script>
+    <script src="js/test_data.js"></script>
+
+    <script type="text/javascript">
+      var map = new AMap.Map("container", {
+        zooms: [2, 20],
+        zoom: 15,
+        viewMode: "3D",
+        pitch: 50,
+        mapStyle: "amap://styles/whitesmoke",
+        showBuildingBlock: true,
+        expandZoomRange: true,
+        center: [116.84655458822007, 38.3],
+      });
+
+      var camera;
+      var renderer;
+      var scene;
+      var meshes = [];
+      // 数据转换工具
+      var customCoords = map.customCoords;
+      // 数据使用转换工具进行转换，这个操作必须要提前执行（在获取镜头参数 函数之前执行），否则将会获得一个错误信息。
+      var data = customCoords.lngLatsToCoords([
+        [116.52, 39.79],
+        [116.54, 39.79],
+        [116.56, 39.79],
+      ]);
+
+      // 管段颜色
+      let pipe_colors = [];
+
+      // 被选择的热管编号
+      let move_pipe_index = -1;
+
+      // 创建 GL 图层
+      var gllayer = new AMap.GLCustomLayer({
+        // 图层的层级
+        zIndex: 10,
+        // 初始化的操作，创建图层过程中执行一次。
+        init(gl) {
+          // 这里我们的地图模式是 3D，所以创建一个透视相机，相机的参数初始化可以随意设置，因为在 render 函数中，每一帧都需要同步相机参数，因此这里变得不那么重要。
+          // 如果你需要 2D 地图（viewMode: '2D'），那么你需要创建一个正交相机
+          camera = new THREE.PerspectiveCamera(
+            60,
+            window.innerWidth / window.innerHeight,
+            100,
+            1 << 30
+          );
+
+          renderer = new THREE.WebGLRenderer({
+            context: gl, // 地图的 gl 上下文
+            // alpha: true,
+            // antialias: true,
+            // canvas: gl.canvas,
+          });
+
+          // 自动清空画布这里必须设置为 false，否则地图底图将无法显示
+          renderer.autoClear = false;
+          scene = new THREE.Scene();
+
+          // 环境光照和平行光
+          var aLight = new THREE.AmbientLight(0xffffff, 0.3);
+          var dLight = new THREE.DirectionalLight(0xffffff, 1);
+          dLight.position.set(1000, -100, 900);
+          scene.add(dLight);
+          scene.add(aLight);
+
+          // 渲染配配置项
+          const RADIUS = 12;
+          const SEGEMENT = 32;
+          const Y_AXIS = new THREE.Vector3(0, 1, 0);
+          const HEIGHT_RATE = -200;
+
+          // 随机高度
+          const press_to_height = new Map();
+
+          test_data.content.forEach((item, index) => {
+            // 处理每一部分
+            // 水压数据获取
+            const { startNodePress, endNodePress } = item;
+            const sPress = Number.parseFloat(startNodePress);
+            const ePress = Number.parseFloat(endNodePress);
+
+            // 管段经纬度位置获取以及坐标系统转换
+            const node_list = JSON.parse(item.setNode);
+            const deal_pos = customCoords.lngLatsToCoords(node_list);
+            const node_count = deal_pos.length;
+
+            // 利用水压生成临时高度数据和颜色数据
+            const step = (ePress - sPress) / (node_count - 1);
+            const height_data = new Float64Array(node_count);
+            const color_data = new Int32Array(node_count);
+            for (let i = 0; i < node_count; i++) {
+              const h = sPress + step * i;
+              let h_res = 0.0;
+              if (press_to_height.has(h)) {
+                h_res = press_to_height.get(h);
+              } else {
+                h_res = Math.random() * HEIGHT_RATE;
+                press_to_height.set(h, h_res);
+              }
+              height_data[i] = h_res;
+              color_data[i] = (Math.atan(h + 2) / Math.PI) * 2 * 0xffff;
+            }
+
+            // 保存管段颜色
+            pipe_colors.push(color_data);
+
+            // 处理每一段水管
+            for (let i = 1; i < node_count; i++) {
+              // 热管的三维数据
+              const pre = deal_pos[i - 1];
+              const now = deal_pos[i];
+
+              // 点和向量
+              const o = new THREE.Vector3(pre[0], pre[1], height_data[i - 1]);
+              const v = new THREE.Vector3(now[0], now[1], height_data[i]);
+              v.sub(o);
+
+              // 圆柱体颜色、材质
+              const geo = new THREE.CylinderGeometry(
+                RADIUS,
+                RADIUS,
+                v.length(),
+                32,
+                true
+              );
+
+              // 为 geo 编号并保存颜色数据
+              geo.name = i;
+
+              // 渐变色
+              const half_len = geo.vertices.length / 2 - 1;
+              const pre_color = color_data[i - 1];
+              const now_color = color_data[i];
+              geo.faces.forEach((face) => {
+                const { a, b, c } = face;
+                face.vertexColors = [
+                  new THREE.Color(a >= half_len ? pre_color : now_color),
+                  new THREE.Color(b >= half_len ? pre_color : now_color),
+                  new THREE.Color(c >= half_len ? pre_color : now_color),
+                ];
+              });
+
+              // 材质、颜色
+              const material = new THREE.MeshBasicMaterial({
+                vertexColors: THREE.VertexColors,
+              });
+
+              // 创建、旋转和移动
+              const cylinder = new THREE.Mesh(geo, material);
+              cylinder.quaternion.setFromUnitVectors(
+                Y_AXIS,
+                v.clone().normalize()
+              );
+              cylinder.position.copy(o.clone().add(v.multiplyScalar(0.5)));
+
+              cylinder.name = index;
+
+              scene.add(cylinder);
+            }
+          });
+
+          // 鼠标交互
+          const raycaster = new THREE.Raycaster();
+          const mouse = new THREE.Vector2();
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+
+          // 鼠标移动回调函数
+          const onMouseMove = (e) => {
+            // 转化为 three.js 坐标
+            mouse.x = (event.clientX / width) * 2 - 1;
+            mouse.y = -(event.clientY / height) * 2 + 1;
+
+            // 将平面坐标系转化为世界坐标系
+            raycaster.setFromCamera(mouse, camera);
+
+            // 恢复更改过颜色的热管
+            if (move_pipe_index != -1) {
+              let is_find = false;
+              scene.traverse((obj) => {
+                if (obj.name === move_pipe_index) {
+                  if (!is_find) {
+                    document.getElementById("container").style.cursor =
+                      "default";
+                  }
+                  is_find = true;
+                  const i = obj.geometry.name;
+                  const half_len = obj.geometry.vertices.length / 2 - 1;
+                  const pre_color = pipe_colors[move_pipe_index][i - 1];
+                  const now_color = pipe_colors[move_pipe_index][i];
+                  obj.geometry.faces.forEach((face) => {
+                    const { a, b, c } = face;
+                    face.vertexColors[0].set(
+                      a >= half_len ? pre_color : now_color
+                    );
+                    face.vertexColors[1].set(
+                      b >= half_len ? pre_color : now_color
+                    );
+                    face.vertexColors[2].set(
+                      c >= half_len ? pre_color : now_color
+                    );
+                  });
+                  obj.geometry.colorsNeedUpdate = true;
+                }
+              });
+              if (is_find) {
+                map.render();
+              }
+              move_pipe_index = -1;
+            }
+
+            // 得到移入的几何体
+            const objs = raycaster.intersectObjects(scene.children);
+            if (objs.length > 0) {
+              const { name } = objs[0].object;
+              move_pipe_index = name;
+
+              // 更改为鼠标移入颜色
+              let is_find = false;
+              scene.traverse((obj) => {
+                if (obj.name === name) {
+                  if (!is_find) {
+                    document.getElementById("container").style.cursor =
+                      "pointer";
+                  }
+                  is_find = true;
+                  const yellow = new THREE.Color(0xffff00);
+                  obj.geometry.faces.forEach((face) => {
+                    face.vertexColors[0].set(yellow);
+                    face.vertexColors[1].set(yellow);
+                    face.vertexColors[2].set(yellow);
+                  });
+                  obj.geometry.colorsNeedUpdate = true;
+                }
+              });
+
+              // 修改选择管道的编号
+              if (is_find) {
+                map.render();
+              }
+            }
+          };
+
+          const onMouseClick = () => {
+            if (move_pipe_index != -1) {
+              console.log(test_data.content[move_pipe_index]);
+            } else {
+              console.log("No pipe click!");
+            }
+          };
+
+          // 监听移动
+          window.addEventListener("mousemove", onMouseMove, false);
+
+          // 监听点击
+          window.addEventListener("mousedown", onMouseClick, false);
+        },
+
+        render() {
+          // 这里必须执行！！重新设置 three 的 gl 上下文状态。
+          renderer.state.reset();
+          var { near, far, fov, up, lookAt, position } =
+            customCoords.getCameraParams();
+
+          // 这里的顺序不能颠倒，否则可能会出现绘制卡顿的效果。
+          camera.near = near;
+          camera.far = far;
+          camera.fov = fov;
+          camera.position.set(...position);
+          camera.up.set(...up);
+          camera.lookAt(...lookAt);
+          camera.updateProjectionMatrix();
+
+          renderer.render(scene, camera);
+        },
+      });
+
+      map.add(gllayer);
+    </script>
+  </body>
+</html>
